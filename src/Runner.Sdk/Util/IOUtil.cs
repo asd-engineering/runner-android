@@ -447,6 +447,12 @@ namespace GitHub.Runner.Sdk
                 }
                 catch (UnauthorizedAccessException ex)
                 {
+                    // On Android/Termux, /data and /data/data are mode 0711 (execute-only) by design;
+                    // the runner directory itself is reachable, so treat unreadable ancestors as OK.
+                    if (dir == "/data" || dir == "/data/data" || dir == "/")
+                    {
+                        return;
+                    }
                     // Permission to read the directory contents is required for '{0}' and each directory up the hierarchy. {1}
                     string message = $"Permission to read the directory contents is required for '{directory}' and each directory up the hierarchy. {ex.Message}";
                     throw new UnauthorizedAccessException(message, ex);

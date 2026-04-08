@@ -1,0 +1,91 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# Lightweight start/stop/status wrapper for the Android self-hosted runner.
+#
+# We deliberately do NOT use runit (`sv`) here — the existing runit setup on
+# this device (asd-build) has been unstable, so we keep this stack flat:
+# nohup + setsid + a wake lock, with a pgrep-based status check.
+#
+# Usage: runner-android-ctl {start|stop|restart|status|logs|enable-boot|disable-boot}
+
+set -eu
+
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+LAYOUT="$REPO_ROOT/_layout"
+LOG="$LAYOUT/runner.log"
+START_SCRIPT="$REPO_ROOT/contrib/android/start-runner.sh"
+BOOT_LINK="$HOME/.termux/boot/runner-android.sh"
+PGREP_PATTERN='dotnet .*Runner\.Listener\.dll'
+
+cmd_status() {
+    if pgrep -f "$PGREP_PATTERN" >/dev/null 2>&1; then
+        echo "running (pid $(pgrep -f "$PGREP_PATTERN" | head -1))"
+        return 0
+    else
+        echo "stopped"
+        return 1
+    fi
+}
+
+cmd_start() {
+    "$START_SCRIPT"
+}
+
+cmd_stop() {
+    if ! pgrep -f "$PGREP_PATTERN" >/dev/null 2>&1; then
+        echo "already stopped"
+        return 0
+    fi
+    # Kill the listener gently first; the run.sh wrapper will exit on its own.
+    pkill -TERM -f "$PGREP_PATTERN" || true
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+        pgrep -f "$PGREP_PATTERN" >/dev/null 2>&1 || break
+        sleep 1
+    done
+    if pgrep -f "$PGREP_PATTERN" >/dev/null 2>&1; then
+        echo "listener did not exit on TERM; sending KILL"
+        pkill -KILL -f "$PGREP_PATTERN" || true
+    fi
+    # Also clean up the run.sh / run-helper.sh wrappers.
+    pkill -f "$LAYOUT/run.sh" 2>/dev/null || true
+    pkill -f "$LAYOUT/run-helper.sh" 2>/dev/null || true
+    echo "stopped"
+}
+
+cmd_restart() {
+    cmd_stop
+    cmd_start
+}
+
+cmd_logs() {
+    if [ ! -f "$LOG" ]; then
+        echo "no log file at $LOG yet"
+        exit 1
+    fi
+    tail -n "${1:-50}" -f "$LOG"
+}
+
+cmd_enable_boot() {
+    mkdir -p "$(dirname "$BOOT_LINK")"
+    ln -sf "$START_SCRIPT" "$BOOT_LINK"
+    echo "boot autostart enabled: $BOOT_LINK -> $START_SCRIPT"
+    echo "(requires the Termux:Boot app from F-Droid)"
+}
+
+cmd_disable_boot() {
+    rm -f "$BOOT_LINK"
+    echo "boot autostart disabled"
+}
+
+case "${1:-}" in
+    start)        cmd_start ;;
+    stop)         cmd_stop ;;
+    restart)      cmd_restart ;;
+    status)       cmd_status ;;
+    logs)         shift || true; cmd_logs "${1:-50}" ;;
+    enable-boot)  cmd_enable_boot ;;
+    disable-boot) cmd_disable_boot ;;
+    *)
+        echo "usage: $(basename "$0") {start|stop|restart|status|logs [N]|enable-boot|disable-boot}" >&2
+        exit 2
+        ;;
+esac
