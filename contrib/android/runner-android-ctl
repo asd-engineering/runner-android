@@ -32,15 +32,16 @@ cmd_status() {
         rc=1
     fi
 
-    # Boot survival warnings — surface common misconfigurations that
-    # silently break reboot autostart. See contrib/android/TERMUX_SETUP.md.
+    # Boot survival warning — only catches the easy case (symlink missing).
+    # We CANNOT reliably check whether the Termux:Boot Android addon is
+    # installed: Android 11+ package visibility blocks `pm path
+    # com.termux.boot` from non-system uids unless the caller declares
+    # <queries> in its AndroidManifest, which we can't do for upstream
+    # Termux. The same query DOES work via `adb shell pm path
+    # com.termux.boot` from a host laptop. Verify reboot survival
+    # explicitly when bringing up a new phone — see TERMUX_SETUP.md §5.
     if [ ! -L "$BOOT_LINK" ]; then
         echo "warning: boot autostart is NOT enabled — run '$0 enable-boot'" >&2
-    fi
-    if ! pm path com.termux.boot >/dev/null 2>&1; then
-        echo "warning: Termux:Boot addon is NOT installed; the boot symlink will not fire on reboot." >&2
-        echo "         install with: $REPO_ROOT/contrib/android/install-termux-boot.sh" >&2
-        echo "         or see contrib/android/TERMUX_SETUP.md for the adb path" >&2
     fi
     return $rc
 }
