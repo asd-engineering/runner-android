@@ -156,9 +156,22 @@ else:
 do_packages() {
     log "[pkg] Updating package lists and installing dependencies"
     pkg update -y >/dev/null
+    # Runner core deps:
+    #   dotnet-sdk-8.0  - .NET 8 runtime for the runner itself
+    #   nodejs          - replaces the bundled glibc Node in externals/
+    #   git curl python - for actions/checkout, gh CLI, parsing tokens
+    #   openssl libicu krb5 zlib - .NET native dep transitive load
+    #   termux-api      - termux-wake-lock used by start-runner.sh
+    #
+    # Build deps for the .asd Termux release pipeline (so the runner can
+    # take a `runs-on: self-hosted-android` build job out of the box):
+    #   jq                                  - workflows + smoke test
+    #   golang clang make binutils caddy ttyd python3
+    #                                       - scripts/termux/build-termux-release.sh
     pkg install -y \
         dotnet-sdk-8.0 nodejs git curl python \
-        openssl libicu krb5 zlib termux-api >/dev/null
+        openssl libicu krb5 zlib termux-api \
+        jq golang clang make binutils caddy ttyd python3 strace >/dev/null
 }
 
 do_git_update() {
