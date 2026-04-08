@@ -42,10 +42,26 @@ cd runner-android
 GITHUB_PAT=ghp_xxx GITHUB_ORG=asd-engineering ./contrib/android/install.sh
 ```
 
-`install.sh` installs Termux packages, builds the layout, applies the bionic
-patches, fetches a registration token, registers with `--disableupdate`,
-installs the Termux:Boot symlink, and starts the runner. Re-runnable; uses
-`--replace` so re-running on the same device cleanly re-registers.
+`install.sh` is fully idempotent. It installs Termux packages, stops any
+existing runner, wipes `_layout` (stale self-update artifacts have bitten
+us before, so we always start clean), builds the layout, applies the
+bionic patches, unregisters any prior runner with the same name on the
+GitHub side, registers fresh with `--disableupdate`, installs the
+Termux:Boot symlink, starts the runner, and polls the GitHub API to
+confirm it comes back as `online`.
+
+Three modes:
+
+```bash
+# fresh install or full rebuild from current checkout
+GITHUB_PAT=ghp_xxx GITHUB_ORG=asd-engineering ./contrib/android/install.sh
+
+# update: git pull then full rebuild + re-register
+GITHUB_PAT=ghp_xxx GITHUB_ORG=asd-engineering ./contrib/android/install.sh --update
+
+# uninstall: stop, unregister from GitHub, delete _layout and boot symlink
+GITHUB_PAT=ghp_xxx GITHUB_ORG=asd-engineering ./contrib/android/install.sh --uninstall
+```
 
 Optional env vars: `RUNNER_NAME` (default `$(hostname)`), `RUNNER_LABELS`
 (default `self-hosted-android`), `GITHUB_REPO` (register at repo level
