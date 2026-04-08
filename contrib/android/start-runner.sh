@@ -1,16 +1,23 @@
 #!/data/data/com.termux/files/usr/bin/bash
-# Start the GitHub Actions self-hosted runner on Android/Termux.
+# Start the GitHub Actions self-hosted runner on Android/Termux as a service.
 #
 # Designed to be invoked from ~/.termux/boot/ on device boot, but also safe
 # to run by hand for restarts.
 #
-# Behavior:
+# Service semantics:
 #   - Acquires a wake lock so Android won't suspend the runner.
-#   - Refuses to start a second instance if one is already running.
-#   - Logs to ~/runner-android/_layout/runner.log (rotated by truncation on
-#     each start; runit/svlogger was avoided because asd-build's runit setup
-#     has been unstable on this device).
-#   - Uses nohup + setsid so the process survives the shell exiting.
+#   - Refuses to start a second watchdog if one is already running.
+#   - Wraps run.sh in a watchdog loop with exponential backoff: if run.sh
+#     exits for any reason (crash, kill, network blip, exit-on-unknown-code),
+#     the watchdog respawns it. This is the "service" behavior — without
+#     this, run.sh's `exit 0` on unknown codes leaves nothing running.
+#   - Logs everything to ~/runner-android/_layout/runner.log.
+#   - Marks its own process via the RUNNER_ANDROID_WATCHDOG env var so the
+#     ctl wrapper can find and kill the loop (not just the listener).
+#
+# We deliberately do NOT use runit (`sv`) here; the existing runit setup on
+# the dev device (asd-build) has been unstable, so we keep this stack flat:
+# nohup + setsid + a tiny watchdog loop.
 
 set -eu
 
@@ -27,19 +34,41 @@ if [ ! -x "$LAYOUT/run.sh" ]; then
     exit 1
 fi
 
-# Avoid double-starts.
-if pgrep -f "dotnet .*Runner\.Listener\.dll" >/dev/null 2>&1; then
-    echo "runner already running (pid $(pgrep -f Runner.Listener.dll | head -1))" >&2
+# If we're the watchdog (re-exec'd below), enter the loop.
+if [ "${RUNNER_ANDROID_WATCHDOG:-0}" = "1" ]; then
+    cd "$LAYOUT"
+    backoff=1
+    max_backoff=60
+    while true; do
+        echo "[watchdog $(date -Iseconds)] starting run.sh" >> "$LOG"
+        start=$(date +%s)
+        ./run.sh >> "$LOG" 2>&1 || true
+        end=$(date +%s)
+        elapsed=$(( end - start ))
+        echo "[watchdog $(date -Iseconds)] run.sh exited after ${elapsed}s; restarting in ${backoff}s" >> "$LOG"
+        # If the runner stayed up >5 min, treat as healthy and reset backoff.
+        if [ "$elapsed" -gt 300 ]; then
+            backoff=1
+        fi
+        sleep "$backoff"
+        backoff=$(( backoff * 2 ))
+        [ "$backoff" -gt "$max_backoff" ] && backoff="$max_backoff"
+    done
+fi
+
+# Foreground entry point: refuse double-start, set up wake lock, fork the
+# watchdog, return.
+if pgrep -f "RUNNER_ANDROID_WATCHDOG=1.*start-runner\.sh" >/dev/null 2>&1; then
+    echo "watchdog already running (pid $(pgrep -f 'RUNNER_ANDROID_WATCHDOG=1.*start-runner\.sh' | head -1))" >&2
     exit 0
 fi
 
-# Keep the CPU awake. Safe to call repeatedly; only effective if the
-# Termux:API package is installed (best-effort, ignore failure).
+# Best-effort wake lock; only effective with the Termux:API addon installed.
 command -v termux-wake-lock >/dev/null 2>&1 && termux-wake-lock || true
 
 cd "$LAYOUT"
 : > "$LOG"
-nohup setsid ./run.sh >> "$LOG" 2>&1 < /dev/null &
+RUNNER_ANDROID_WATCHDOG=1 nohup setsid "$0" >> "$LOG" 2>&1 < /dev/null &
 disown || true
 
-echo "runner started, logging to $LOG"
+echo "runner watchdog started, logging to $LOG"

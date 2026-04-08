@@ -15,10 +15,20 @@ LOG="$LAYOUT/runner.log"
 START_SCRIPT="$REPO_ROOT/contrib/android/start-runner.sh"
 BOOT_LINK="$HOME/.termux/boot/runner-android.sh"
 PGREP_PATTERN='dotnet .*Runner\.Listener\.dll'
+WATCHDOG_PATTERN='RUNNER_ANDROID_WATCHDOG=1.*start-runner\.sh'
 
 cmd_status() {
-    if pgrep -f "$PGREP_PATTERN" >/dev/null 2>&1; then
-        echo "running (pid $(pgrep -f "$PGREP_PATTERN" | head -1))"
+    local listener_pid watchdog_pid
+    listener_pid=$(pgrep -f "$PGREP_PATTERN" | head -1 || true)
+    watchdog_pid=$(pgrep -f "$WATCHDOG_PATTERN" | head -1 || true)
+    if [ -n "$listener_pid" ] && [ -n "$watchdog_pid" ]; then
+        echo "running (listener pid $listener_pid, watchdog pid $watchdog_pid)"
+        return 0
+    elif [ -n "$listener_pid" ]; then
+        echo "listener running (pid $listener_pid) but watchdog is gone"
+        return 0
+    elif [ -n "$watchdog_pid" ]; then
+        echo "watchdog running (pid $watchdog_pid) but listener is down — respawning"
         return 0
     else
         echo "stopped"
@@ -31,21 +41,25 @@ cmd_start() {
 }
 
 cmd_stop() {
-    if ! pgrep -f "$PGREP_PATTERN" >/dev/null 2>&1; then
+    if ! pgrep -f "$PGREP_PATTERN" >/dev/null 2>&1 && \
+       ! pgrep -f "$WATCHDOG_PATTERN" >/dev/null 2>&1; then
         echo "already stopped"
         return 0
     fi
-    # Kill the listener gently first; the run.sh wrapper will exit on its own.
-    pkill -TERM -f "$PGREP_PATTERN" || true
+    # Order matters: kill the watchdog first so it doesn't respawn the listener
+    # under our feet.
+    pkill -KILL -f "$WATCHDOG_PATTERN" 2>/dev/null || true
+    # Then gracefully signal the listener; run.sh wrapper exits on its own.
+    pkill -TERM -f "$PGREP_PATTERN" 2>/dev/null || true
     for _ in 1 2 3 4 5 6 7 8 9 10; do
         pgrep -f "$PGREP_PATTERN" >/dev/null 2>&1 || break
         sleep 1
     done
     if pgrep -f "$PGREP_PATTERN" >/dev/null 2>&1; then
         echo "listener did not exit on TERM; sending KILL"
-        pkill -KILL -f "$PGREP_PATTERN" || true
+        pkill -KILL -f "$PGREP_PATTERN" 2>/dev/null || true
     fi
-    # Also clean up the run.sh / run-helper.sh wrappers.
+    # Clean up any remaining run.sh / run-helper.sh wrappers.
     pkill -f "$LAYOUT/run.sh" 2>/dev/null || true
     pkill -f "$LAYOUT/run-helper.sh" 2>/dev/null || true
     echo "stopped"
