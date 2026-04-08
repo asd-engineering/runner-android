@@ -18,22 +18,31 @@ PGREP_PATTERN='dotnet .*Runner\.Listener\.dll'
 WATCHDOG_PATTERN='start-runner\.sh --watchdog'
 
 cmd_status() {
-    local listener_pid watchdog_pid
+    local listener_pid watchdog_pid rc=0
     listener_pid=$(pgrep -f "$PGREP_PATTERN" | head -1 || true)
     watchdog_pid=$(pgrep -f "$WATCHDOG_PATTERN" | head -1 || true)
     if [ -n "$listener_pid" ] && [ -n "$watchdog_pid" ]; then
         echo "running (listener pid $listener_pid, watchdog pid $watchdog_pid)"
-        return 0
     elif [ -n "$listener_pid" ]; then
         echo "listener running (pid $listener_pid) but watchdog is gone"
-        return 0
     elif [ -n "$watchdog_pid" ]; then
         echo "watchdog running (pid $watchdog_pid) but listener is down — respawning"
-        return 0
     else
         echo "stopped"
-        return 1
+        rc=1
     fi
+
+    # Boot survival warnings — surface common misconfigurations that
+    # silently break reboot autostart. See contrib/android/TERMUX_SETUP.md.
+    if [ ! -L "$BOOT_LINK" ]; then
+        echo "warning: boot autostart is NOT enabled — run '$0 enable-boot'" >&2
+    fi
+    if ! pm path com.termux.boot >/dev/null 2>&1; then
+        echo "warning: Termux:Boot addon is NOT installed; the boot symlink will not fire on reboot." >&2
+        echo "         install with: $REPO_ROOT/contrib/android/install-termux-boot.sh" >&2
+        echo "         or see contrib/android/TERMUX_SETUP.md for the adb path" >&2
+    fi
+    return $rc
 }
 
 cmd_start() {

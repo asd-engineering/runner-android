@@ -5,6 +5,12 @@ self-hosted runner on an Android phone (aarch64) under Termux. None of this is
 relevant to the upstream `actions/runner` build — keep all changes scoped here
 so the rest of the repo stays a clean fork.
 
+> **New phone? Start with [TERMUX_SETUP.md](TERMUX_SETUP.md)** for the
+> end-to-end checklist (Android apps, addon install via adb / `termux-open`
+> / F-Droid, the required one-time taps, battery optimization, SSH).
+> The README below is the implementation reference for what
+> `install.sh` is doing on top of a prepared device.
+
 ## Why a fork is needed
 
 The upstream `linux-arm64` build assumes glibc. Three things break on Termux's
