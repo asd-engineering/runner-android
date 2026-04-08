@@ -15,7 +15,13 @@ LOG="$LAYOUT/runner.log"
 START_SCRIPT="$REPO_ROOT/contrib/android/start-runner.sh"
 BOOT_LINK="$HOME/.termux/boot/runner-android.sh"
 PGREP_PATTERN='dotnet .*Runner\.Listener\.dll'
-WATCHDOG_PATTERN='start-runner\.sh --watchdog'
+# Match either invocation path of the watchdog:
+#   - start-runner.sh --watchdog       (via runner-android-ctl restart)
+#   - runner-android.sh --watchdog     (via the ~/.termux/boot symlink, which
+#                                       Termux:Boot invokes by symlink name —
+#                                       /proc/PID/cmdline reflects the symlink
+#                                       path, not the resolved target)
+WATCHDOG_PATTERN='(start-runner|runner-android)\.sh --watchdog'
 
 cmd_status() {
     local listener_pid watchdog_pid rc=0
