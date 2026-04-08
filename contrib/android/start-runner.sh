@@ -34,8 +34,10 @@ if [ ! -x "$LAYOUT/run.sh" ]; then
     exit 1
 fi
 
-# If we're the watchdog (re-exec'd below), enter the loop.
-if [ "${RUNNER_ANDROID_WATCHDOG:-0}" = "1" ]; then
+# If we're the watchdog (re-exec'd below with --watchdog), enter the loop.
+# We use an argv flag rather than an env var because pgrep -f matches against
+# /proc/PID/cmdline, which only contains argv.
+if [ "${1:-}" = "--watchdog" ]; then
     cd "$LAYOUT"
     backoff=1
     max_backoff=60
@@ -58,8 +60,8 @@ fi
 
 # Foreground entry point: refuse double-start, set up wake lock, fork the
 # watchdog, return.
-if pgrep -f "RUNNER_ANDROID_WATCHDOG=1.*start-runner\.sh" >/dev/null 2>&1; then
-    echo "watchdog already running (pid $(pgrep -f 'RUNNER_ANDROID_WATCHDOG=1.*start-runner\.sh' | head -1))" >&2
+if pgrep -f "start-runner\.sh --watchdog" >/dev/null 2>&1; then
+    echo "watchdog already running (pid $(pgrep -f 'start-runner\.sh --watchdog' | head -1))" >&2
     exit 0
 fi
 
@@ -68,7 +70,7 @@ command -v termux-wake-lock >/dev/null 2>&1 && termux-wake-lock || true
 
 cd "$LAYOUT"
 : > "$LOG"
-RUNNER_ANDROID_WATCHDOG=1 nohup setsid "$0" >> "$LOG" 2>&1 < /dev/null &
+nohup setsid "$0" --watchdog >> "$LOG" 2>&1 < /dev/null &
 disown || true
 
 echo "runner watchdog started, logging to $LOG"

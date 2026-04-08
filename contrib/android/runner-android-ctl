@@ -15,7 +15,7 @@ LOG="$LAYOUT/runner.log"
 START_SCRIPT="$REPO_ROOT/contrib/android/start-runner.sh"
 BOOT_LINK="$HOME/.termux/boot/runner-android.sh"
 PGREP_PATTERN='dotnet .*Runner\.Listener\.dll'
-WATCHDOG_PATTERN='RUNNER_ANDROID_WATCHDOG=1.*start-runner\.sh'
+WATCHDOG_PATTERN='start-runner\.sh --watchdog'
 
 cmd_status() {
     local listener_pid watchdog_pid
