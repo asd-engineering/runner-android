@@ -1,0 +1,121 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# Lightweight start/stop/status wrapper for the Android self-hosted runner.
+#
+# We deliberately do NOT use runit (`sv`) here — the existing runit setup on
+# this device (asd-build) has been unstable, so we keep this stack flat:
+# nohup + setsid + a wake lock, with a pgrep-based status check.
+#
+# Usage: runner-android-ctl {start|stop|restart|status|logs|enable-boot|disable-boot}
+
+set -eu
+
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+LAYOUT="$REPO_ROOT/_layout"
+LOG="$LAYOUT/runner.log"
+START_SCRIPT="$REPO_ROOT/contrib/android/start-runner.sh"
+BOOT_LINK="$HOME/.termux/boot/runner-android.sh"
+PGREP_PATTERN='dotnet .*Runner\.Listener\.dll'
+# Match either invocation path of the watchdog:
+#   - start-runner.sh --watchdog       (via runner-android-ctl restart)
+#   - runner-android.sh --watchdog     (via the ~/.termux/boot symlink, which
+#                                       Termux:Boot invokes by symlink name —
+#                                       /proc/PID/cmdline reflects the symlink
+#                                       path, not the resolved target)
+WATCHDOG_PATTERN='(start-runner|runner-android)\.sh --watchdog'
+
+cmd_status() {
+    local listener_pid watchdog_pid rc=0
+    listener_pid=$(pgrep -f "$PGREP_PATTERN" | head -1 || true)
+    watchdog_pid=$(pgrep -f "$WATCHDOG_PATTERN" | head -1 || true)
+    if [ -n "$listener_pid" ] && [ -n "$watchdog_pid" ]; then
+        echo "running (listener pid $listener_pid, watchdog pid $watchdog_pid)"
+    elif [ -n "$listener_pid" ]; then
+        echo "listener running (pid $listener_pid) but watchdog is gone"
+    elif [ -n "$watchdog_pid" ]; then
+        echo "watchdog running (pid $watchdog_pid) but listener is down — respawning"
+    else
+        echo "stopped"
+        rc=1
+    fi
+
+    # Boot survival warning — only catches the easy case (symlink missing).
+    # We CANNOT reliably check whether the Termux:Boot Android addon is
+    # installed: Android 11+ package visibility blocks `pm path
+    # com.termux.boot` from non-system uids unless the caller declares
+    # <queries> in its AndroidManifest, which we can't do for upstream
+    # Termux. The same query DOES work via `adb shell pm path
+    # com.termux.boot` from a host laptop. Verify reboot survival
+    # explicitly when bringing up a new phone — see TERMUX_SETUP.md §5.
+    if [ ! -L "$BOOT_LINK" ]; then
+        echo "warning: boot autostart is NOT enabled — run '$0 enable-boot'" >&2
+    fi
+    return $rc
+}
+
+cmd_start() {
+    "$START_SCRIPT"
+}
+
+cmd_stop() {
+    if ! pgrep -f "$PGREP_PATTERN" >/dev/null 2>&1 && \
+       ! pgrep -f "$WATCHDOG_PATTERN" >/dev/null 2>&1; then
+        echo "already stopped"
+        return 0
+    fi
+    # Order matters: kill the watchdog first so it doesn't respawn the listener
+    # under our feet.
+    pkill -KILL -f "$WATCHDOG_PATTERN" 2>/dev/null || true
+    # Then gracefully signal the listener; run.sh wrapper exits on its own.
+    pkill -TERM -f "$PGREP_PATTERN" 2>/dev/null || true
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+        pgrep -f "$PGREP_PATTERN" >/dev/null 2>&1 || break
+        sleep 1
+    done
+    if pgrep -f "$PGREP_PATTERN" >/dev/null 2>&1; then
+        echo "listener did not exit on TERM; sending KILL"
+        pkill -KILL -f "$PGREP_PATTERN" 2>/dev/null || true
+    fi
+    # Clean up any remaining run.sh / run-helper.sh wrappers.
+    pkill -f "$LAYOUT/run.sh" 2>/dev/null || true
+    pkill -f "$LAYOUT/run-helper.sh" 2>/dev/null || true
+    echo "stopped"
+}
+
+cmd_restart() {
+    cmd_stop
+    cmd_start
+}
+
+cmd_logs() {
+    if [ ! -f "$LOG" ]; then
+        echo "no log file at $LOG yet"
+        exit 1
+    fi
+    tail -n "${1:-50}" -f "$LOG"
+}
+
+cmd_enable_boot() {
+    mkdir -p "$(dirname "$BOOT_LINK")"
+    ln -sf "$START_SCRIPT" "$BOOT_LINK"
+    echo "boot autostart enabled: $BOOT_LINK -> $START_SCRIPT"
+    echo "(requires the Termux:Boot app from F-Droid)"
+}
+
+cmd_disable_boot() {
+    rm -f "$BOOT_LINK"
+    echo "boot autostart disabled"
+}
+
+case "${1:-}" in
+    start)        cmd_start ;;
+    stop)         cmd_stop ;;
+    restart)      cmd_restart ;;
+    status)       cmd_status ;;
+    logs)         shift || true; cmd_logs "${1:-50}" ;;
+    enable-boot)  cmd_enable_boot ;;
+    disable-boot) cmd_disable_boot ;;
+    *)
+        echo "usage: $(basename "$0") {start|stop|restart|status|logs [N]|enable-boot|disable-boot}" >&2
+        exit 2
+        ;;
+esac
